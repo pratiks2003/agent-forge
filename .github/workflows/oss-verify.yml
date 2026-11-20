@@ -1,0 +1,107 @@
+name: oss-verify
+
+# Verifier agent: runs an upstream project's own test suite against the squad's fork branch.
+# The checked-out code is third-party and untrusted, so this job gets NO secrets and a
+# read-only token. Inputs only reach the shell through environment variables.
+run-name: "verify ${{ inputs.contribution }} · ${{ inputs.fork }}@${{ inputs.branch }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      fork:
+        description: "owner/name of the fork"
+        required: true
+      branch:
+        description: "branch with the fix"
+        required: true
+      contribution:
+        description: "Salesforce OSS_Contribution__c name"
+        required: true
+      language:
+        description: "TypeScript | JavaScript | Python | Apex"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout fork branch
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.fork }}
+          ref: ${{ inputs.branch }}
+          persist-credentials: false
+
+      - name: Detect project type
+        id: detect
+        shell: bash
+        run: |
+          kind=none; tests=false
+          if [ -f package.json ]; then
+            kind=node
+            if node -e "const s=require('./package.json').scripts||{}; process.exit(s.test && !/no test specified/.test(s.test) ? 0 : 1)"; then tests=true; fi
+          elif [ -f pyproject.toml ] || [ -f setup.py ] || [ -f setup.cfg ] || ls requirements*.txt >/dev/null 2>&1; then
+            kind=python
+            if [ -d tests ] || [ -d test ] || ls -R | grep -q -E '^test_.*\.py$|_test\.py$'; then tests=true; fi
+          fi
+          if [ -f sfdx-project.json ] || [ -n "$(find . -name '*.cls' -not -path './node_modules/*' | head -1)" ]; then
+            if [ "$kind" = none ] || [ "$tests" = false ]; then kind=apex; fi
+          fi
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
+          echo "tests=$tests" >> "$GITHUB_OUTPUT"
+          echo "Detected kind=$kind tests=$tests"
+
+      - uses: actions/setup-node@v4
+        if: steps.detect.outputs.kind == 'node' || steps.detect.outputs.kind == 'apex'
+        with:
+          node-version: 20
+
+      - uses: actions/setup-python@v5
+        if: steps.detect.outputs.kind == 'python'
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        if: steps.detect.outputs.tests == 'true'
+        shell: bash
+        env:
+          CI: "true"
+        run: |
+          if [ "${{ steps.detect.outputs.kind }}" = node ]; then
+            if [ -f pnpm-lock.yaml ]; then corepack enable && pnpm install --frozen-lockfile || pnpm install
+            elif [ -f yarn.lock ]; then corepack enable && (yarn install --frozen-lockfile || yarn install)
+            elif [ -f package-lock.json ]; then npm ci || npm install
+            else npm install; fi
+          else
+            python -m pip install --upgrade pip
+            pip install -e ".[test]" 2>/dev/null || pip install -e ".[dev]" 2>/dev/null || pip install -e . 2>/dev/null || true
+            for f in requirements*.txt; do [ -f "$f" ] && pip install -r "$f" || true; done
+            pip install pytest
+          fi
+
+      - name: Run tests
+        if: steps.detect.outputs.tests == 'true'
+        shell: bash
+        env:
+          CI: "true"
+        run: |
+          if [ "${{ steps.detect.outputs.kind }}" = node ]; then
+            if [ -f pnpm-lock.yaml ]; then pnpm test; elif [ -f yarn.lock ]; then yarn test; else npm test; fi
+          else
+            python -m pytest -q
+          fi
+
+      - name: Static check
+        if: steps.detect.outputs.kind == 'apex'
+        shell: bash
+        run: |
+          # Parse every Apex class/trigger; prettier exits 2 only on syntax errors (1 = formatting diffs, fine)
+          set +e
+          npx --yes -p prettier@3 -p prettier-plugin-apex@2 prettier --plugin=prettier-plugin-apex --list-different "**/*.{cls,trigger}" > /dev/null
+          code=$?
+          [ $code -le 1 ] && echo "Apex parses cleanly" || { echo "Apex syntax error"; exit 1; }

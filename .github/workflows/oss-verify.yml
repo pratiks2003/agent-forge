@@ -52,14 +52,25 @@ jobs:
           if [ -f sfdx-project.json ] || [ -n "$(find . -name '*.cls' -not -path './node_modules/*' | head -1)" ]; then
             if [ "$kind" = none ] || [ "$tests" = false ]; then kind=apex; fi
           fi
+          nodefile=""
+          for f in .nvmrc .node-version; do [ -f "$f" ] && nodefile="$f" && break; done
+          if [ -z "$nodefile" ] && [ -f package.json ] && node -e "process.exit(((require('./package.json').engines||{}).node)?0:1)"; then nodefile=package.json; fi
+          echo "nodefile=$nodefile" >> "$GITHUB_OUTPUT"
           echo "kind=$kind" >> "$GITHUB_OUTPUT"
           echo "tests=$tests" >> "$GITHUB_OUTPUT"
           echo "Detected kind=$kind tests=$tests"
 
-      - uses: actions/setup-node@v4
-        if: steps.detect.outputs.kind == 'node' || steps.detect.outputs.kind == 'apex'
+      - name: Setup Node (project version)
+        uses: actions/setup-node@v4
+        if: (steps.detect.outputs.kind == 'node' || steps.detect.outputs.kind == 'apex') && steps.detect.outputs.nodefile != ''
         with:
-          node-version: 20
+          node-version-file: ${{ steps.detect.outputs.nodefile }}
+
+      - name: Setup Node (LTS)
+        uses: actions/setup-node@v4
+        if: (steps.detect.outputs.kind == 'node' || steps.detect.outputs.kind == 'apex') && steps.detect.outputs.nodefile == ''
+        with:
+          node-version: 22
 
       - uses: actions/setup-python@v5
         if: steps.detect.outputs.kind == 'python'

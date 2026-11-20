@@ -1,0 +1,42 @@
+name: watchdog-failover
+
+# 12 hours after the Salesforce job (08:00 UTC). If today has no contribution yet,
+# run a backup quest end-to-end so the streak never breaks.
+on:
+  schedule:
+    - cron: "0 20 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Run the backup quest even if today already has contributions"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  models: read # GitHub Models inference via GITHUB_TOKEN (no external LLM key)
+
+concurrency:
+  group: watchdog
+  cancel-in-progress: false
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Check streak and run backup quest if needed
+        env:
+          AGENT_PAT: ${{ secrets.AGENT_PAT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+          PROFILE_REPO: ${{ vars.PROFILE_REPO || github.repository_owner }}
+          DASHBOARD_URL: ${{ vars.DASHBOARD_URL }}
+          MODEL: ${{ vars.WATCHDOG_MODEL || 'openai/gpt-4.1' }}
+          FORCE: ${{ inputs.force || 'false' }}
+        run: node scripts/watchdog.mjs

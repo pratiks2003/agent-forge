@@ -10,7 +10,7 @@ Rules the autonomous agent (and humans) follow in this repository.
 ## Code style
 - Strict TypeScript (`strict`, `noUncheckedIndexedAccess`). No `any`.
 - Named exports only, one primary export per file.
-- Imports use relative paths without extensions, e.g. `import { unique } from "../src/arrays/unique";`.
+- Tests import from the implementation file directly (e.g. `import { clamp } from "../src/math/clamp";`), never from `src/index`. The pipeline re-exports new modules from `src/index.ts` automatically.
 - Every exported function has JSDoc with `@example`, `@param`, `@returns` and its Big-O complexity.
 - Pure functions; never mutate inputs.
 - Throw `RangeError`/`TypeError` with clear messages on invalid arguments.

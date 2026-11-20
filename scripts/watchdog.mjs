@@ -212,6 +212,23 @@ async function putFile(branch, path, content, message) {
   return data.commit.sha;
 }
 
+async function ensureIndexExport(branch, filePath) {
+  if (!filePath.startsWith("src/") || filePath === "src/index.ts") return null;
+  const cur = await gh("GET", `/repos/${OWNER}/${REPO}/contents/src/index.ts?ref=${encodeURIComponent(branch)}`, null, { allow: [404] });
+  if (!cur.ok) return null;
+  const text = Buffer.from(cur.data.content, "base64").toString("utf8");
+  const mod = `./${filePath.replace(/^src\//, "").replace(/\.ts$/, "")}`;
+  if (text.includes(`"${mod}"`) || text.includes(`'${mod}'`)) return null;
+  const next = `${text.endsWith("\n") ? text : `${text}\n`}export * from "${mod}";\n`;
+  const { data } = await gh("PUT", `/repos/${OWNER}/${REPO}/contents/src/index.ts`, {
+    message: `chore: export ${mod} from the public API`,
+    branch,
+    sha: cur.data.sha,
+    content: Buffer.from(next, "utf8").toString("base64")
+  });
+  return data.commit.sha;
+}
+
 async function refreshProfile(prTitle, prUrl) {
   const path = `/repos/${OWNER}/${PROFILE_REPO}/contents/README.md`;
   const cur = await gh("GET", path, null, { allow: [404] });
@@ -254,7 +271,7 @@ async function main() {
   }
   const gen = await llmJson(
     "You are a senior TypeScript engineer. Implement the issue as ONE file under src/ and ONE Vitest file under tests/, " +
-      "matching the retrieved code's conventions exactly. Must pass `tsc --noEmit` (strict, noUncheckedIndexedAccess) and `vitest run`. " +
+      "matching the retrieved code's conventions exactly. The test must import from the implementation file directly (e.g. ../src/math/clamp), never from ../src/index. Must pass `tsc --noEmit` (strict, noUncheckedIndexedAccess) and `vitest run`. " +
       "Implementation < 150 lines, tests < 120 lines, no dependencies. commitMessage is a Conventional Commit. prBody has Summary/Changes/Testing. " +
       "codeReviewCritique is an honest review of the diff covering Complexity, Edge cases, Security, Follow-ups.",
     `## Issue #${issue.number}: ${issue.title}\n\n${(issue.body || "").substring(0, 6000)}\n\n## Guide\n${ctx.guide.substring(0, 3000)}\n\n` +
@@ -267,7 +284,8 @@ async function main() {
   const branch = `agent/quest-${issue.number}`;
   await gh("POST", `/repos/${OWNER}/${REPO}/git/refs`, { ref: `refs/heads/${branch}`, sha: ctx.sha }, { allow: [422] });
   await putFile(branch, gen.filePath, gen.fileContent, gen.commitMessage);
-  const headSha = await putFile(branch, gen.unitTestPath, gen.unitTestContent, `test: cover ${gen.filePath} (#${issue.number})`);
+  let headSha = await putFile(branch, gen.unitTestPath, gen.unitTestContent, `test: cover ${gen.filePath} (#${issue.number})`);
+  headSha = (await ensureIndexExport(branch, gen.filePath)) ?? headSha;
   note(`Committed ${gen.filePath} + ${gen.unitTestPath} to ${branch}`);
 
   const existing = await gh("GET", `/repos/${OWNER}/${REPO}/pulls?state=open&head=${encodeURIComponent(`${OWNER}:${branch}`)}`);

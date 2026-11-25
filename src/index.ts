@@ -5,3 +5,4 @@ export * from "./arrays/groupBy";
 export * from "./arrays/chunk";
 export * from "./arrays/zip";
 export * from "./arrays/flatMap";
+export * from "./math/lerp";
